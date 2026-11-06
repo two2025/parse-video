@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -17,11 +18,11 @@ import (
 
 type douYin struct{}
 
-func (d douYin) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (d douYin) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := fmt.Sprintf("https://www.iesdouyin.com/share/video/%s", videoId)
 
-	client := newClient()
-	res, err := client.R().
+	client := newClient(SourceDouYin)
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1").
 		Get(reqUrl)
 	if err != nil {
@@ -47,7 +48,7 @@ func (d douYin) parseVideoID(videoId string) (*VideoParseInfo, error) {
 		aBogus := d.randSeq(64)
 
 		reqUrl = fmt.Sprintf("https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/?reflow_source=reflow_page&web_id=%s&device_id=%s&aweme_ids=%%5B%s%%5D&request_source=200&a_bogus=%s", webId, webId, videoId, aBogus)
-		res, err = client.R().
+		res, err = client.R().SetContext(ctx).
 			SetHeader(HttpHeaderUserAgent, "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1").
 			Get(reqUrl)
 		if err != nil {
@@ -85,7 +86,7 @@ func (d douYin) parseVideoID(videoId string) (*VideoParseInfo, error) {
 			)
 		}
 
-		data, err = d.fetchNativeVideoDetail(client, videoId)
+		data, err = d.fetchNativeVideoDetail(ctx, client, videoId)
 		if err != nil {
 			return nil, fmt.Errorf("get native douyin video detail: %w", err)
 		}
@@ -150,7 +151,7 @@ func (d douYin) parseVideoID(videoId string) (*VideoParseInfo, error) {
 	// 视频地址非空时，获取302重定向之后的视频地址
 	// 图集时，视频地址为空，不处理
 	if len(videoInfo.VideoUrl) > 0 {
-		d.getRedirectUrl(videoInfo)
+		d.getRedirectUrl(ctx, videoInfo)
 	}
 
 	if videoInfo.VideoUrl == "" && len(videoInfo.Images) == 0 {
@@ -160,38 +161,40 @@ func (d douYin) parseVideoID(videoId string) (*VideoParseInfo, error) {
 	return videoInfo, nil
 }
 
-func (d douYin) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (d douYin) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	urlRes, err := url.Parse(shareUrl)
 	if err != nil {
 		return nil, err
 	}
 
-	switch urlRes.Host {
+	switch httpHostname(urlRes) {
 	case "www.iesdouyin.com", "www.douyin.com":
-		return d.parsePcShareUrl(shareUrl) // 解析电脑网页端链接
+		return d.parsePcShareUrl(ctx, shareUrl) // 解析电脑网页端链接
 	case "v.douyin.com":
-		return d.parseAppShareUrl(shareUrl) // 解析App分享链接
+		return d.parseAppShareUrl(ctx, shareUrl) // 解析App分享链接
 	}
 
 	return nil, fmt.Errorf("douyin not support this host: %s", urlRes.Host)
 }
 
-func (d douYin) parseAppShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (d douYin) parseAppShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	// 适配App分享链接类型:
 	// https://v.douyin.com/xxxxxx/
 
-	client := newClient()
+	client := newClient(SourceDouYin)
 	// disable redirects in the HTTP client, get params before redirects
 	client.SetRedirectPolicy(resty.NoRedirectPolicy())
-	res, err := client.R().
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, DefaultUserAgent).
 		Get(shareUrl)
-	// 非 resty.ErrAutoRedirectDisabled 错误时，返回错误
+	if err == nil {
+		return nil, errShortLinkDidNotRedirect
+	}
 	if !errors.Is(err, resty.ErrAutoRedirectDisabled) {
 		return nil, err
 	}
 
-	locationRes, err := res.RawResponse.Location()
+	locationRes, err := checkedLocation(SourceDouYin, res)
 	if err != nil {
 		return nil, err
 	}
@@ -205,14 +208,14 @@ func (d douYin) parseAppShareUrl(shareUrl string) (*VideoParseInfo, error) {
 	}
 
 	// 西瓜视频解析方式不一样
-	if strings.Contains(locationRes.Host, "ixigua.com") {
-		return xiGua{}.parseVideoID(videoId)
+	if hostMatches(httpHostname(locationRes), "ixigua.com") {
+		return xiGua{}.parseVideoID(ctx, videoId)
 	}
 
-	return d.parseVideoID(videoId)
+	return d.parseVideoID(ctx, videoId)
 }
 
-func (d douYin) parsePcShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (d douYin) parsePcShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	// 适配电脑网页端链接类型
 	// https://www.iesdouyin.com/share/video/xxxxxx/
 	// https://www.douyin.com/video/xxxxxx
@@ -220,7 +223,7 @@ func (d douYin) parsePcShareUrl(shareUrl string) (*VideoParseInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.parseVideoID(videoId)
+	return d.parseVideoID(ctx, videoId)
 }
 
 func (d douYin) parseVideoIdFromPath(urlPath string) (string, error) {
@@ -254,15 +257,17 @@ func (d douYin) parseVideoIdFromPath(urlPath string) (string, error) {
 	return "", errors.New("parse video id from path fail")
 }
 
-func (d douYin) getRedirectUrl(videoInfo *VideoParseInfo) {
-	client := newClient()
+func (d douYin) getRedirectUrl(ctx context.Context, videoInfo *VideoParseInfo) {
+	client := newClient(SourceDouYin)
 	client.SetRedirectPolicy(resty.NoRedirectPolicy())
-	res2, _ := client.R().
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, DefaultUserAgent).
 		Get(videoInfo.VideoUrl)
-	locationRes, _ := res2.RawResponse.Location()
-	if locationRes != nil {
-		(*videoInfo).VideoUrl = locationRes.String()
+	if !errors.Is(err, resty.ErrAutoRedirectDisabled) {
+		return
+	}
+	if location, err := checkedLocation(SourceDouYin, res); err == nil {
+		videoInfo.VideoUrl = location.String()
 	}
 }
 
@@ -270,7 +275,7 @@ func (d douYin) randSeq(n int) string {
 	letters := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = letters[rand.Intn(len(letters))] // #nosec G404 -- Synthetic public slides API parameter, never used as a secret.
 	}
 	return string(b)
 }
@@ -278,7 +283,7 @@ func (d douYin) randSeq(n int) string {
 // 生成固定位数的随机数字（前导零）
 func (d douYin) generateFixedLengthNumericID(length int) string {
 	// 创建一个新的随机数生成器源
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // #nosec G404 -- Synthetic public device ID, never used for authentication.
 
 	max2 := int64(1)
 	for i := 0; i < length; i++ {

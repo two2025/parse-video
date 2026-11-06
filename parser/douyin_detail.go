@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -50,14 +51,14 @@ type douyinWebDetailFetcher struct {
 	random   func() int
 }
 
-func (d douYin) fetchNativeVideoDetail(client *resty.Client, videoID string) (gjson.Result, error) {
+func (d douYin) fetchNativeVideoDetail(ctx context.Context, client *resty.Client, videoID string) (gjson.Result, error) {
 	fetcher := newDouyinWebDetailFetcher(client, os.Getenv(douyinCookieEnv))
-	return fetcher.fetch(videoID)
+	return fetcher.fetch(ctx, videoID)
 }
 
 func newDouyinWebDetailFetcher(client *resty.Client, cookie string) douyinWebDetailFetcher {
 	if client == nil {
-		client = newClient()
+		client = newClient(SourceDouYin)
 	}
 
 	return douyinWebDetailFetcher{
@@ -65,13 +66,10 @@ func newDouyinWebDetailFetcher(client *resty.Client, cookie string) douyinWebDet
 		endpoint: douyinWebDetailEndpoint,
 		cookie:   strings.TrimSpace(cookie),
 		now:      time.Now,
-		random: func() int {
-			return rand.Intn(10000)
-		},
 	}
 }
 
-func (f douyinWebDetailFetcher) fetch(videoID string) (gjson.Result, error) {
+func (f douyinWebDetailFetcher) fetch(ctx context.Context, videoID string) (gjson.Result, error) {
 	if f.cookie == "" {
 		return gjson.Result{}, fmt.Errorf("%s is required for the native douyin detail request", douyinCookieEnv)
 	}
@@ -87,7 +85,7 @@ func (f douyinWebDetailFetcher) fetch(videoID string) (gjson.Result, error) {
 
 	query := douyinWebDetailQuery(videoID)
 	requestURL := f.endpoint + "?" + query + "&a_bogus=" + f.aBogus(query)
-	response, err := f.client.R().
+	response, err := f.client.R().SetContext(ctx).
 		SetHeaders(map[string]string{
 			HttpHeaderUserAgent: douyinWebDetailUserAgent,
 			HttpHeaderReferer:   "https://www.douyin.com/",
@@ -131,7 +129,9 @@ func (f douyinWebDetailFetcher) aBogus(query string) string {
 	}
 	randomNumber := f.random
 	if randomNumber == nil {
-		randomNumber = func() int { return rand.Intn(10000) }
+		randomNumber = func() int {
+			return rand.Intn(10000) // #nosec G404 -- Public protocol padding and simulated elapsed time.
+		}
 	}
 
 	started := now().UnixMilli()
@@ -218,20 +218,20 @@ func makeDouyinABogus(query, method string, started, finished int64, random1, ra
 		0,
 		rune((started >> 8) & 255),
 		3,
-		rune(finished >> 32),
+		rune(finished >> 32), // #nosec G115 -- Shifting a signed int64 by 32 bits yields a signed 32-bit value.
 		1,
-		rune(started >> 32),
+		rune(started >> 32), // #nosec G115 -- Shifting a signed int64 by 32 bits yields a signed 32-bit value.
 		1,
 		rune(len(douyinABogusBrowser)),
 		0, 0, 0,
 	}
 
-	checksum := 0
+	var checksum rune
 	for _, value := range payload {
-		checksum ^= int(value)
+		checksum ^= value
 	}
 	payload = append(payload, []rune(douyinABogusBrowser)...)
-	payload = append(payload, rune(checksum))
+	payload = append(payload, checksum)
 
 	prefix := append(douyinABogusRandomGroup(random1, 1, 2, 5, 45&170), douyinABogusRandomGroup(random2, 1, 0, 0, 0)...)
 	prefix = append(prefix, douyinABogusRandomGroup(random3, 1, 0, 5, 0)...)
@@ -239,26 +239,26 @@ func makeDouyinABogus(query, method string, started, finished int64, random1, ra
 	return douyinABogusEncode(append(prefix, ciphertext...))
 }
 
-func douyinABogusRandomGroup(value, extra1, extra2, extra3, extra4 int) []rune {
-	low := value & 255
-	high := (value >> 8) & 255
+func douyinABogusRandomGroup(value int, extra1, extra2, extra3, extra4 rune) []rune {
+	low := rune(value & 255)
+	high := rune((value >> 8) & 255)
 	return []rune{
-		rune((low & 170) | extra1),
-		rune((low & 85) | extra2),
-		rune((high & 170) | extra3),
-		rune((high & 85) | extra4),
+		(low & 170) | extra1,
+		(low & 85) | extra2,
+		(high & 170) | extra3,
+		(high & 85) | extra4,
 	}
 }
 
 func douyinABogusRC4(plaintext []rune) []rune {
-	state := make([]int, 256)
+	var state [256]byte
 	for i := range state {
-		state[i] = i
+		state[i] = byte(i)
 	}
 
 	position := 0
 	for i := range state {
-		position = (position + state[i] + int('y')) % len(state)
+		position = (position + int(state[i]) + int('y')) % len(state)
 		state[i], state[position] = state[position], state[i]
 	}
 
@@ -266,9 +266,9 @@ func douyinABogusRC4(plaintext []rune) []rune {
 	result := make([]rune, len(plaintext))
 	for i, value := range plaintext {
 		index := (i + 1) % len(state)
-		position = (position + state[index]) % len(state)
+		position = (position + int(state[index])) % len(state)
 		state[index], state[position] = state[position], state[index]
-		result[i] = rune(state[(state[index]+state[position])%len(state)] ^ int(value))
+		result[i] = rune(state[state[index]+state[position]]) ^ value
 	}
 	return result
 }
@@ -276,13 +276,12 @@ func douyinABogusRC4(plaintext []rune) []rune {
 func douyinABogusEncode(values []rune) string {
 	var result strings.Builder
 	for index := 0; index < len(values); index += 3 {
-		var number uint32
-		number = uint32(values[index]) << 16
+		number := values[index] << 16
 		if index+1 < len(values) {
-			number |= uint32(values[index+1]) << 8
+			number |= values[index+1] << 8
 		}
 		if index+2 < len(values) {
-			number |= uint32(values[index+2])
+			number |= values[index+2]
 		}
 
 		result.WriteByte(douyinABogusAlphabet[(number>>18)&63])

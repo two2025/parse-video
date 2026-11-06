@@ -1,5 +1,7 @@
 package parser
 
+import "context"
+
 // 视频渠道来源
 const (
 	SourceDouYin       = "douyin"       // 抖音
@@ -43,12 +45,12 @@ const (
 
 // videoShareUrlParser 根据视频分享地址解析
 type videoShareUrlParser interface {
-	parseShareUrl(shareUrl string) (*VideoParseInfo, error)
+	parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error)
 }
 
 // videoIdParser 根据视频ID解析
 type videoIdParser interface {
-	parseVideoID(videoId string) (*VideoParseInfo, error)
+	parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error)
 }
 
 // VideoParseInfo 视频解析信息

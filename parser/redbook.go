@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -12,10 +13,10 @@ import (
 
 type redBook struct{}
 
-func (r redBook) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
-	client := newClient()
+func (r redBook) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
+	client := newClient(SourceRedBook)
 	// 桌面 UA 的无登录请求会被服务端 302 到登录页，必须使用移动端 UA
-	videoRes, err := client.R().
+	videoRes, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, DefaultUserAgent).
 		Get(shareUrl)
 	if err != nil {

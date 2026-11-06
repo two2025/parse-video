@@ -4,7 +4,7 @@
 `main.go` is the entrypoint and embeds `templates/` for the web UI. `cmd/` contains the Cobra CLI and Gin HTTP server (`serve`, `parse`, `id`, middleware, handlers, output helpers). `parser/` holds platform-specific parsing logic plus shared routing in `parser.go` and source metadata in `vars.go`. Keep small shared helpers in `utils/`. API definitions live in `api/openapi.yaml`, static assets in `resources/`, and agent/ADR docs in `docs/agents/` and `docs/adr/`.
 
 ## Build, Test, and Development Commands
-Use Go 1.24 as declared in `go.mod`.
+Use the Go version declared in `go.mod`.
 
 - `go run main.go` starts the default `serve` command on port `8080`.
 - `go run main.go parse "https://v.douyin.com/xxxxx"` parses a share URL from the CLI.

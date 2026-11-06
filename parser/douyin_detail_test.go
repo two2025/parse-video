@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -123,7 +124,7 @@ func TestDouyinWebDetailFetcherFetchesOfficialDetail(t *testing.T) {
 	fetcher.now = func() time.Time { return time.UnixMilli(1720000000123) }
 	fetcher.random = func() int { return 1234 }
 
-	data, err := fetcher.fetch(videoID)
+	data, err := fetcher.fetch(context.Background(), videoID)
 	if err != nil {
 		t.Fatalf("fetch() error = %v", err)
 	}
@@ -147,7 +148,7 @@ func TestDouyinWebDetailFetcherReportsOfficialErrorStatus(t *testing.T) {
 	fetcher.now = func() time.Time { return time.UnixMilli(1720000000123) }
 	fetcher.random = func() int { return 1234 }
 
-	_, err := fetcher.fetch("7450123456789012345")
+	_, err := fetcher.fetch(context.Background(), "7450123456789012345")
 	if err == nil {
 		t.Fatal("fetch() error = nil, want official detail status error")
 	}
@@ -167,7 +168,7 @@ func TestDouyinWebDetailFetcherRequiresDeploymentCookie(t *testing.T) {
 
 	fetcher := newDouyinWebDetailFetcher(resty.New(), "")
 	fetcher.endpoint = server.URL
-	_, err := fetcher.fetch("7450123456789012345")
+	_, err := fetcher.fetch(context.Background(), "7450123456789012345")
 	if err == nil || !strings.Contains(err.Error(), douyinCookieEnv+" is required") {
 		t.Fatalf("fetch() error = %v, want missing cookie error", err)
 	}
