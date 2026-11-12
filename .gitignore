@@ -24,3 +24,10 @@ node_modules
 package.json
 package-lock.json
 tmp/
+.worktrees/
+# Visual Companion mockups
+.superpowers/
+
+# dev scaffolding: 手动链接测试脚本, 用 go run test.go 运行
+test.go
+.codex

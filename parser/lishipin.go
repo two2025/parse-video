@@ -1,28 +1,28 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
 type liShiPin struct {
 }
 
-func (l liShiPin) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (l liShiPin) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := fmt.Sprintf("https://www.pearvideo.com/videoStatus.jsp?contId=%s&mrd=%d", videoId, time.Now().Unix())
 	headers := map[string]string{
 		HttpHeaderReferer:   fmt.Sprintf("https://www.pearvideo.com/detail_%s", videoId),
 		HttpHeaderUserAgent: "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
 	}
 
-	client := resty.New()
-	res, err := client.R().
+	client := newClient(SourceLiShiPin)
+	res, err := client.R().SetContext(ctx).
 		SetHeaders(headers).
 		Get(reqUrl)
 	if err != nil {
@@ -43,7 +43,7 @@ func (l liShiPin) parseVideoID(videoId string) (*VideoParseInfo, error) {
 	return parseRes, nil
 }
 
-func (l liShiPin) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (l liShiPin) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	urlRes, err := url.Parse(shareUrl)
 	if err != nil {
 		return nil, err
@@ -54,5 +54,5 @@ func (l liShiPin) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 		return nil, errors.New("parse video_id from share url fail")
 	}
 
-	return l.parseVideoID(videoId)
+	return l.parseVideoID(ctx, videoId)
 }

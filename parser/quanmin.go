@@ -1,16 +1,16 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"net/url"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
 type quanMin struct{}
 
-func (q quanMin) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (q quanMin) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	urlRes, err := url.Parse(shareUrl)
 	if err != nil {
 		return nil, err
@@ -21,13 +21,13 @@ func (q quanMin) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 		return nil, errors.New("parse video_id from share url fail")
 	}
 
-	return q.parseVideoID(videoId)
+	return q.parseVideoID(ctx, videoId)
 }
 
-func (q quanMin) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (q quanMin) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := "https://quanmin.hao222.com/wise/growth/api/sv/immerse?source=share-h5&pd=qm_share_mvideo&_format=json&vid=" + videoId
-	client := resty.New()
-	res, err := client.R().
+	client := newClient(SourceQuanMin)
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, DefaultUserAgent).
 		Get(reqUrl)
 	if err != nil {

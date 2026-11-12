@@ -1,18 +1,18 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"strings"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
 type piPiGaoXiao struct {
 }
 
-func (p piPiGaoXiao) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (p piPiGaoXiao) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := "https://share.ippzone.com/ppapi/share/fetch_content"
 	headers := map[string]string{
 		HttpHeaderReferer:   reqUrl,
@@ -20,8 +20,8 @@ func (p piPiGaoXiao) parseVideoID(videoId string) (*VideoParseInfo, error) {
 	}
 	postData := "{\"pid\":" + videoId + ",\"type\":\"post\",\"mid\":null}"
 
-	client := resty.New()
-	res, err := client.R().
+	client := newClient(SourcePiPiGaoXiao)
+	res, err := client.R().SetContext(ctx).
 		SetHeaders(headers).
 		SetBody([]byte(postData)).
 		Post(reqUrl)
@@ -50,7 +50,7 @@ func (p piPiGaoXiao) parseVideoID(videoId string) (*VideoParseInfo, error) {
 	return parseRes, nil
 }
 
-func (p piPiGaoXiao) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (p piPiGaoXiao) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	urlRes, err := url.Parse(shareUrl)
 	if err != nil {
 		return nil, err
@@ -61,5 +61,5 @@ func (p piPiGaoXiao) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 		return nil, errors.New("parse video_id from share url fail")
 	}
 
-	return p.parseVideoID(videoId)
+	return p.parseVideoID(ctx, videoId)
 }

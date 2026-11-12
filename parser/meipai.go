@@ -2,21 +2,21 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/go-resty/resty/v2"
 )
 
 type meiPai struct {
 }
 
-func (m meiPai) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
-	client := resty.New()
-	res, err := client.R().
+func (m meiPai) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
+	client := newClient(SourceMeiPai)
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36").
 		Get(shareUrl)
 	if err != nil {
@@ -51,9 +51,9 @@ func (m meiPai) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 
 }
 
-func (m meiPai) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (m meiPai) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := "https://www.meipai.com/video/" + videoId
-	return m.parseShareUrl(reqUrl)
+	return m.parseShareUrl(ctx, reqUrl)
 }
 
 func (m meiPai) parseVideoBs64(videoBs64 string) (string, error) {

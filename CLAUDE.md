@@ -4,22 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go-based video parsing service that removes watermarks from videos across 20+ Chinese social media platforms. The project provides both a web API and a library for parsing video share links and extracting clean video URLs.
+This is a Go-based video parsing tool that removes watermarks from videos across 20+ Chinese social media platforms. The project provides a CLI tool, a web API, and a Go library for parsing video share links and extracting clean video URLs.
 
 ## Development Commands
 
 ### Building and Running
 ```bash
-# Run the web server locally
+# Run the web server locally (default port 8080, cobra default subcommand: serve)
 go run main.go
+
+# Run with custom port
+go run main.go serve --port 9090
 
 # Run with basic auth (requires both environment variables)
 export PARSE_VIDEO_USERNAME=your_username
 export PARSE_VIDEO_PASSWORD=your_password
-go run main.go
+go run main.go serve
+
+# CLI: parse a share link
+go run main.go parse "分享链接"
+
+# CLI: parse by video ID
+go run main.go id --source douyin "视频ID"
 
 # Build the binary
-go build -o main ./main.go
+go build -o parse-video .
 ```
 
 ### Testing
@@ -27,11 +36,24 @@ go build -o main ./main.go
 # Run all tests
 go test ./...
 
-# Run specific test file
-go test ./parser/douyin_test.go
+# Run specific package tests
+go test ./parser/ -run TestDouYin
+go test ./cmd/ -run TestIntegrationV1ParseURL
 
 # Run tests with verbose output
 go test -v ./...
+```
+
+### Code Quality
+```bash
+# Pre-commit checks (includes go-unit-tests, gofmt, goimports)
+pre-commit run --all-files
+
+# Install pre-commit hooks
+pre-commit install
+
+# Hot reload development (requires air)
+air
 ```
 
 ### Docker
@@ -39,8 +61,11 @@ go test -v ./...
 # Build Docker image
 docker build -t parse-video .
 
-# Run container
+# Run container (default port 8080)
 docker run -d -p 8080:8080 parse-video
+
+# Run with custom port
+docker run -d -p 9090:9090 parse-video -port 9090
 
 # Run with basic auth
 docker run -d -p 8080:8080 -e PARSE_VIDEO_USERNAME=user -e PARSE_VIDEO_PASSWORD=pass parse-video
@@ -53,37 +78,53 @@ docker run -d -p 8080:8080 -e PARSE_VIDEO_USERNAME=user -e PARSE_VIDEO_PASSWORD=
 1. **Parser System** (`parser/`):
    - `parser.go`: Main entry point with URL routing logic
    - `vars.go`: Defines platform constants, interfaces, and data structures
+   - `client.go`: HTTP 客户端工厂（代理注入、并发安全）
    - Platform-specific parsers (e.g., `douyin.go`, `kuaishou.go`)
 
-2. **Web Server** (`main.go`):
-   - Gin-based HTTP server
-   - Basic auth middleware (optional)
-   - Embedded HTML templates
-   - Two main endpoints: `/video/share/url/parse` and `/video/id/parse`
+2. **CLI & Web Server** (`cmd/`):
+   - `root.go`: Cobra root command (default subcommand: serve, PersistentPreRunE 初始化代理)
+   - `serve.go`: Gin-based HTTP server with middleware stack
+   - `parse.go`: CLI subcommand for parsing share links (single/batch)
+   - `id.go`: CLI subcommand for parsing by video ID + platform
+   - `download.go`: Media file download logic
+   - `output.go`: Output formatting (text/JSON)
+   - `handlers.go`: HTTP route handlers (v1 API + legacy compat)
+   - `response.go`: Unified API response helpers
+   - `middleware.go`: Recovery, CORS, rate limiting, basic auth, logging
 
-3. **Utilities** (`utils/`):
+3. **Entry Point** (`main.go`):
+   - Embeds HTML templates via `//go:embed`
+   - Initializes Cobra CLI and delegates to `cmd` package
+
+4. **Utilities** (`utils/`):
    - `utils.go`: URL extraction utilities using regex
 
 ### Key Design Patterns
 
 - **Strategy Pattern**: Each platform has its own parser implementing `videoShareUrlParser` and `videoIdParser` interfaces
-- **Factory Pattern**: `videoSourceInfoMapping` maps platform identifiers to their respective parsers
+- **Factory Pattern**: `VideoSourceInfoMapping` maps platform identifiers to their respective parsers
 - **Interface Segregation**: Separate interfaces for share URL parsing and video ID parsing
+- **Cobra CLI**: `cmd/` package uses spf13/cobra for subcommands (serve, parse, id, version)
 
 ### Data Flow
 
-1. **Share URL Parsing**: 
+1. **Share URL Parsing**:
    - Extract URL from input string using regex
-   - Match URL domain to platform in `videoSourceInfoMapping`
+   - Match URL domain to platform in `VideoSourceInfoMapping`
    - Call platform-specific `parseShareUrl()` method
 
 2. **Video ID Parsing**:
    - Direct lookup by platform source and video ID
    - Call platform-specific `parseVideoID()` method
 
-3. **Batch Processing**:
-   - Concurrent parsing using goroutines and sync.WaitGroup
-   - Thread-safe result collection with mutex
+3. **Batch Processing** (CLI `parse` subcommand):
+   - Concurrent parsing using goroutines and semaphore channel (default concurrency: 8)
+   - Supports file input (`--file`) and stdin (`-f -`)
+
+4. **HTTP API**:
+   - v1 API: `GET /api/v1/parse`, `GET /api/v1/parse/:source/:video_id`
+   - Legacy compat: `GET /video/share/url/parse`, `GET /video/id/parse`
+   - Middleware stack: Recovery → CORS → Logging → Rate Limiting → Basic Auth
 
 ## Platform Support
 
@@ -102,12 +143,17 @@ Key platforms include:
 ### Environment Variables
 - `PARSE_VIDEO_USERNAME`: Basic auth username (optional)
 - `PARSE_VIDEO_PASSWORD`: Basic auth password (optional)
+- `RATE_LIMIT_RPM`: Rate limit per IP per minute (default: 60)
+- `CORS_ORIGINS`: Allowed CORS origins, comma-separated (default: `*`)
+- `PARSE_VIDEO_PROXY`: HTTP/HTTPS 代理地址，格式 `http://[user:pass@]host:port`（可选，不设置则直连）
 
 ### Dependencies
 - `github.com/gin-gonic/gin`: Web framework
 - `github.com/go-resty/resty/v2`: HTTP client
 - `github.com/tidwall/gjson`: JSON parsing
 - `github.com/PuerkitoBio/goquery`: HTML parsing
+- `github.com/spf13/cobra`: CLI framework
+- `golang.org/x/time`: Rate limiting
 
 ## Code Style and Conventions
 
@@ -121,7 +167,7 @@ Key platforms include:
 
 - Unit tests in `*_test.go` files
 - Pre-commit hooks configured for running tests
-- Test cases cover platform-specific parsing logic
+- Test cases cover platform-specific parsing logic, CLI commands, and HTTP handlers
 - Focus on ID extraction and URL validation
 
 ## Adding New Platforms
@@ -131,3 +177,27 @@ Key platforms include:
 3. Add mapping in `videoSourceInfoMapping`
 4. Write unit tests for new parser
 5. Update README.md with platform support
+
+## Gotchas
+
+- **移动端 UA 必须**：所有平台请求必须使用移动端 User-Agent（`DefaultUserAgent` 在 `parser/vars.go` 中定义），桌面端 UA 会导致解析失败
+- **抖音图集/视频分支**：抖音解析器根据 HTML 中的 canonical URL 判断是图集（`/note/`）还是视频，走不同的 API 路径
+- **域名匹配方式**：`ParseVideoShareUrl` 使用 `strings.Contains` 匹配域名，不是精确匹配；`matchPlatform`（handler 层）使用 `url.Parse` + 后缀匹配
+- **旧路由兼容**：`/video/share/url/parse` 和 `/video/id/parse` 仍保留，响应格式与 v1 API 不同（`code` 字段而非 `status` 字段）
+- **无状态设计**：服务不持久化数据，每次请求独立处理，无数据库
+- **批量并发控制**：CLI 批量解析使用 semaphore channel（并发度 8），非无限制 goroutine
+
+## Agent skills
+
+### Issue tracker
+
+Issues 记录在 GitHub Issues（wujunwei928/parse-video），使用 `gh` CLI。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用默认五标签 triage 词汇（needs-triage、needs-info、ready-for-agent、ready-for-human、wontfix）。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+Single-context 布局：仓库根目录一个 `GLOSSARY.md` + `docs/adr/`。见 `docs/agents/domain.md`。
+

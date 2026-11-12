@@ -1,17 +1,17 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"regexp"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
 type huYa struct {
 }
 
-func (h huYa) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
+func (h huYa) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
 	re := regexp.MustCompile(`\/(\d+).html`)
 
 	findRes := re.FindSubmatch([]byte(shareUrl))
@@ -19,18 +19,18 @@ func (h huYa) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 		return nil, errors.New("parse video from share url fail")
 	}
 
-	return h.parseVideoID(string(findRes[1]))
+	return h.parseVideoID(ctx, string(findRes[1]))
 }
 
-func (h huYa) parseVideoID(videoId string) (*VideoParseInfo, error) {
+func (h huYa) parseVideoID(ctx context.Context, videoId string) (*VideoParseInfo, error) {
 	reqUrl := "https://liveapi.huya.com/moment/getMomentContent?videoId=" + videoId
 	headers := map[string]string{
 		HttpHeaderUserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36",
 		HttpHeaderReferer:   "https://v.huya.com/",
 	}
 
-	client := resty.New()
-	res, err := client.R().
+	client := newClient(SourceHuYa)
+	res, err := client.R().SetContext(ctx).
 		SetHeaders(headers).
 		Get(reqUrl)
 	if err != nil {

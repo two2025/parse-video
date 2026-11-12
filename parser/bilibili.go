@@ -1,12 +1,14 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/go-resty/resty/v2"
 )
 
 // 添加Cookie可以爬取更高清的视频，记得要把下面请求里的Cookie的注释也去掉
@@ -16,20 +18,25 @@ const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 
 type biliBili struct{}
 
-func (b biliBili) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
-	bvid, err := b.getBvidFromURL(shareUrl)
+func (b biliBili) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
+	bvid, err := b.getBvidFromURL(ctx, shareUrl)
 	if err != nil {
 		return nil, fmt.Errorf("无法提取BVID: %w", err)
 	}
 	viewAPIURL := fmt.Sprintf("https://api.bilibili.com/x/web-interface/view?bvid=%s", bvid)
-	viewRespBytes, err := b.sendBiliRequest(viewAPIURL)
+	viewRespBytes, err := b.sendBiliRequest(ctx, viewAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("请求视频信息API失败: %w", err)
 	}
 	var viewResp biliViewResponse
 	if err := json.Unmarshal(viewRespBytes, &viewResp); err != nil {
+		return nil, fmt.Errorf("解析视频信息响应失败: %w", err)
 	}
-	if viewResp.Code != 0 || len(viewResp.Data.Pages) == 0 {
+	if viewResp.Code != 0 {
+		return nil, fmt.Errorf("B站API返回错误: %s (code: %d)", viewResp.Message, viewResp.Code)
+	}
+	if len(viewResp.Data.Pages) == 0 {
+		return nil, fmt.Errorf("视频没有可用的分页数据")
 	}
 	firstPageCID := viewResp.Data.Pages[0].Cid
 
@@ -38,7 +45,7 @@ func (b biliBili) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
 		bvid, firstPageCID,
 	)
 
-	playRespBytes, err := b.sendBiliRequest(playAPIURL)
+	playRespBytes, err := b.sendBiliRequest(ctx, playAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("请求播放链接API失败: %w", err)
 	}
@@ -109,34 +116,36 @@ type biliPlayURLResponse struct {
 	} `json:"data"`
 }
 
-func (b biliBili) getBvidFromURL(rawURL string) (string, error) {
+func (b biliBili) getBvidFromURL(ctx context.Context, rawURL string) (string, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("URL格式无效")
 	}
 
-	if strings.Contains(parsedURL.Host, "b23.tv") {
-		client := &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
+	if hostMatches(httpHostname(parsedURL), "b23.tv") {
+		client := newClient(SourceBiliBili)
+		client.SetRedirectPolicy(resty.NoRedirectPolicy())
+		for hops := 0; hostMatches(httpHostname(parsedURL), "b23.tv"); hops++ {
+			if hops == maxRedirects {
+				return "", errors.New("b23.tv 短链重定向次数过多")
+			}
+			resp, err := client.R().SetContext(ctx).
+				SetHeader(HttpHeaderUserAgent, UserAgent).
+				Get(parsedURL.String())
+			if !errors.Is(err, resty.ErrAutoRedirectDisabled) {
+				if err == nil {
+					return "", errors.New("无法从 b23.tv 获取重定向链接")
+				}
+				return "", fmt.Errorf("请求 b23.tv 短链失败: %w", err)
+			}
+			parsedURL, err = checkedLocation(SourceBiliBili, resp)
+			if err != nil {
+				return "", err
+			}
 		}
-		resp, err := client.Get(rawURL)
-		if err != nil {
-			return "", fmt.Errorf("请求b23.tv短链失败: %v", err)
-		}
-		defer func(Body io.ReadCloser) {
-			_ = Body.Close()
-		}(resp.Body)
-
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return "", fmt.Errorf("无法从b23.tv获取重定向链接")
-		}
-		return b.getBvidFromURL(location)
 	}
 
-	if strings.Contains(parsedURL.Host, "bilibili.com") {
+	if hostMatches(httpHostname(parsedURL), "bilibili.com") {
 		path := strings.Trim(parsedURL.Path, "/")
 		parts := strings.Split(path, "/")
 		if len(parts) >= 2 && parts[0] == "video" {
@@ -149,29 +158,21 @@ func (b biliBili) getBvidFromURL(rawURL string) (string, error) {
 	return "", fmt.Errorf("不是有效的B站视频链接")
 }
 
-func (b biliBili) sendBiliRequest(apiURL string) ([]byte, error) {
-	req, err := http.NewRequest("GET", apiURL, nil)
+func (b biliBili) sendBiliRequest(ctx context.Context, apiURL string) ([]byte, error) {
+	client := newClient(SourceBiliBili)
+	resp, err := client.R().SetContext(ctx).
+		SetHeader(HttpHeaderUserAgent, UserAgent).
+		// 如需爬取更高清的视频请取消这里的注释
+		// SetHeader(HttpHeaderCookie, BiliCookie).
+		SetHeader(HttpHeaderReferer, "https://www.bilibili.com/").
+		Get(apiURL)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("User-Agent", UserAgent)
-	// 如需爬取更高清的视频请取消这里的注释
-	// req.Header.Set("Cookie", BiliCookie)
-	req.Header.Set("Referer", "https://www.bilibili.com/")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP请求失败, 状态码: %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("HTTP请求失败, 状态码: %d", resp.StatusCode())
 	}
 
-	return io.ReadAll(resp.Body)
+	return resp.Body(), nil
 }

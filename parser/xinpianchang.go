@@ -2,18 +2,18 @@ package parser
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
 
 type xinPianChang struct {
 }
 
-func (x xinPianChang) parseShareUrl(shareUrl string) (*VideoParseInfo, error) {
-	client := resty.New()
-	res, err := client.R().
+func (x xinPianChang) parseShareUrl(ctx context.Context, shareUrl string) (*VideoParseInfo, error) {
+	client := newClient(SourceXinPianChang)
+	res, err := client.R().SetContext(ctx).
 		SetHeader(HttpHeaderUserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.125 Safari/537.3").
 		//SetHeader(HttpHeaderUserAgent, DefaultUserAgent).
 		SetHeader("Upgrade-Insecure-Requests", "1").
